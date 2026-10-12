@@ -18,7 +18,8 @@
  *    shallowCopy({}) => {}
  */
 function shallowCopy(obj) {
-  return { ...obj };
+  const newObj = Object.create(Object.getPrototypeOf(obj));
+  return Object.assign(newObj, obj);
 }
 
 /**
@@ -33,16 +34,17 @@ function shallowCopy(obj) {
  *    mergeObjects([]) => {}
  */
 function mergeObjects(objects) {
-  return objects.reduce((acc, obj) => {
-    Object.keys(obj).forEach((key) => {
-      if (Object.hasOwn(acc, key)) {
-        acc[key] += obj[key];
+  const newObj = {};
+  objects.forEach((object) => {
+    Object.entries(object).forEach((item) => {
+      if (Object.hasOwn(newObj, item[0])) {
+        newObj[item[0]] += object[item[0]];
       } else {
-        acc[key] = obj[key];
+        newObj[item[0]] = object[item[0]];
       }
     });
-    return acc;
-  }, {});
+  });
+  return newObj;
 }
 
 /**
@@ -59,10 +61,11 @@ function mergeObjects(objects) {
  *
  */
 function removeProperties(obj, keys) {
-  const result = {};
-  Object.keys(obj).forEach((key) => {
-    if (!keys.includes(key)) {
-      result[key] = obj[key];
+  const result = { ...obj };
+  Object.keys(result).forEach((key) => {
+    const keyIndex = keys.indexOf(key);
+    if (keyIndex !== -1) {
+      delete result[key];
     }
   });
   return result;
@@ -395,72 +398,131 @@ function group(array, keySelector, valueSelector) {
 
 class CssSelector {
   constructor() {
-    this.element = '';
-    this.id = '';
+    this.elementValue = '';
+    this.idValue = '';
     this.classes = [];
     this.attrs = [];
     this.pseudoClasses = [];
-    this.pseudoElement = '';
-    this.combinedStr = '';
+    this.pseudoElementValue = '';
+    this.combinationValue = '';
   }
 
   clone() {
     const clone = new CssSelector();
-    clone.element = this.element;
-    clone.id = this.id;
+    clone.elementValue = this.elementValue;
+    clone.idValue = this.idValue;
     clone.classes = [...this.classes];
     clone.attrs = [...this.attrs];
     clone.pseudoClasses = [...this.pseudoClasses];
-    clone.pseudoElement = this.pseudoElement;
-    clone.combinedStr = this.combinedStr;
+    clone.pseudoElementValue = this.pseudoElementValue;
+    clone.combinationValue = this.combinationValue
+      ? [...this.combinationValue]
+      : null;
     return clone;
   }
 
   element(value) {
     const clone = this.clone();
-    clone.element = value;
+    if (clone.elementValue)
+      throw new Error(
+        'Element, id and pseudo-element should not occur more than one time inside the selector'
+      );
+    if (
+      clone.idValue ||
+      clone.classes.length !== 0 ||
+      clone.attrs.length !== 0 ||
+      clone.pseudoClasses.length !== 0 ||
+      clone.pseudoElementValue
+    ) {
+      throw new Error(
+        'Selector parts should be arranged in the following order: element, id, class, attribute, pseudo-class, pseudo-element'
+      );
+    }
+    clone.elementValue = value;
     return clone;
   }
 
   id(value) {
     const clone = this.clone();
-    clone.id = `#${value}`;
+    if (clone.idValue)
+      throw new Error(
+        'Element, id and pseudo-element should not occur more than one time inside the selector'
+      );
+    if (
+      clone.classes.length !== 0 ||
+      clone.attrs.length !== 0 ||
+      clone.pseudoClasses.length !== 0 ||
+      clone.pseudoElementValue
+    ) {
+      throw new Error(
+        'Selector parts should be arranged in the following order: element, id, class, attribute, pseudo-class, pseudo-element'
+      );
+    }
+    clone.idValue = `#${value}`;
     return clone;
   }
 
   class(value) {
     const clone = this.clone();
+    if (
+      clone.attrs.length !== 0 ||
+      clone.pseudoClasses.length !== 0 ||
+      clone.pseudoElementValue
+    ) {
+      throw new Error(
+        'Selector parts should be arranged in the following order: element, id, class, attribute, pseudo-class, pseudo-element'
+      );
+    }
     clone.classes.push(`.${value}`);
     return clone;
   }
 
   attr(value) {
     const clone = this.clone();
+    if (clone.pseudoClasses.length !== 0 || clone.pseudoElementValue) {
+      throw new Error(
+        'Selector parts should be arranged in the following order: element, id, class, attribute, pseudo-class, pseudo-element'
+      );
+    }
     clone.attrs.push(`[${value}]`);
     return clone;
   }
 
   pseudoClass(value) {
     const clone = this.clone();
+    if (clone.pseudoElementValue) {
+      throw new Error(
+        'Selector parts should be arranged in the following order: element, id, class, attribute, pseudo-class, pseudo-element'
+      );
+    }
     clone.pseudoClasses.push(`:${value}`);
     return clone;
   }
 
   pseudoElement(value) {
     const clone = this.clone();
-    clone.pseudoElement = `::${value}`;
+    if (clone.pseudoElementValue)
+      throw new Error(
+        'Element, id and pseudo-element should not occur more than one time inside the selector'
+      );
+    clone.pseudoElementValue = `::${value}`;
     return clone;
   }
 
   stringify() {
-    if (this.combinedStr) return this.combinedStr;
+    if (this.combinationValue) {
+      return this.combinationValue
+        .map((item) => (typeof item === 'string' ? item : item.stringify()))
+        .join(' ')
+        .trim();
+    }
     return [
-      this.element,
-      this.id,
+      this.elementValue,
+      this.idValue,
       ...this.classes,
       ...this.attrs,
       ...this.pseudoClasses,
-      this.pseudoElement,
+      this.pseudoElementValue,
     ].join('');
   }
 }
@@ -491,12 +553,25 @@ const cssSelectorBuilder = {
   },
 
   combine(selector1, combinator, selector2) {
-    const str1 = selector1.stringify();
-    const str2 = selector2.stringify();
-
     const combined = new CssSelector();
 
-    combined.combinedStr = `${str1} ${combinator} ${str2}`;
+    const parts = [];
+
+    if (selector1 && selector1.combinationValue) {
+      parts.push(...selector1.combinationValue);
+    } else if (selector1) {
+      parts.push(selector1);
+    }
+
+    parts.push(combinator);
+
+    if (selector2 && selector2.combinationValue) {
+      parts.push(...selector2.combinationValue);
+    } else if (selector2) {
+      parts.push(selector2);
+    }
+
+    combined.combinationValue = parts;
     return combined;
   },
 };
